@@ -1,3 +1,11 @@
+// TODO(ritave): Remove types after https://github.com/MetaMask/snaps-skunkworks/issues/367 is fixed
+declare const wallet: {
+  registerRpcMessageHandler: (
+    handler: (originString: string, requestObject: any) => any,
+  ) => void;
+  request: (data: { method: string; params: any[] }) => Promise<any>;
+};
+
 wallet.registerRpcMessageHandler(async (originString, requestObject) => {
   switch (requestObject.method) {
     case 'hello':

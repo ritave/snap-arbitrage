@@ -16,7 +16,7 @@
   "scripts": {
     "build:clean": "yarn clean && yarn build",
     "build:website": "node ./scripts/build-website.js",
-    "build": "mm-snap build",
+    "build": "mm-snap build -s src/index.ts",
     "serve": "mm-snap serve",
     "clean": "rimraf dist/*",
     "test": "echo 'TODO'",
@@ -40,7 +40,9 @@
     "eslint-plugin-prettier": "^3.4.0",
     "mkdirp": "^1.0.4",
     "prettier": "^2.3.2",
-    "rimraf": "^3.0.2"
+    "rimraf": "^3.0.2",
+    "tsify": "^5.0.4",
+    "typescript": "^4.6.3"
   },
   "publishConfig": {
     "access": "public",
