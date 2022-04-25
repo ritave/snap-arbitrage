@@ -46,6 +46,11 @@
       <button class="sendExecute">Start arbitrage trading</button>
       <button class="sendStop">Stop</button>
     </div>
+
+    <div>
+      Executed trades
+      <ul class="executedTrades"></ul>
+    </div>
   </body>
 
   <script>
@@ -56,6 +61,9 @@
     const inputTokenB = document.querySelector('input.inputTokenB');
     const sendExecute = document.querySelector('button.sendExecute');
     const sendStop = document.querySelector('button.sendStop');
+    const executedTrades = document.querySelector('ul.executedTrades');
+
+    let executedTradesInterval = undefined;
 
     connectButton.addEventListener('click', connect);
     sendExecute.addEventListener('click', () =>
@@ -73,6 +81,8 @@
           },
         ],
       });
+      clearInterval(executedTradesInterval);
+      executedTradesInterval = setInterval(getExecutedTrades, 5000);
     }
 
     // here we call the snap's "execute" method
@@ -97,6 +107,8 @@
     }
 
     async function stop() {
+      clearInterval(executedTradesInterval);
+      executedTradesInterval = undefined;
       try {
         const response = await ethereum.request({
           method: 'wallet_invokeSnap',
@@ -112,6 +124,18 @@
         console.error(err);
         alert('Problem happened: ' + err.message || err);
       }
+    }
+
+    async function getExecutedTrades() {
+      const results = await ethereum.request({
+        method: 'wallet_invokeSnap',
+        params: [snapId, { method: 'get_executed' }],
+      });
+
+      executedTrades.innerHTML = results.reduce(
+        (acc, log) => (acc += `<li>${JSON.stringify(log)}</li>\n`),
+        '',
+      );
     }
   </script>
 </html>

@@ -1,6 +1,7 @@
 import type { BIP44CoinTypeNode } from '@metamask/key-tree';
 import { getBIP44AddressKeyDeriver } from '@metamask/key-tree';
 import type { SnapProvider } from '@metamask/snap-types';
+import { Mutex } from 'async-mutex';
 import { BigNumber, Contract, ethers, Wallet } from 'ethers';
 import {
   Address,
@@ -15,6 +16,24 @@ import { onceToPromise, sortAddresses } from './utils';
 // TODO(ritave): Remove types after https://github.com/MetaMask/snaps-skunkworks/issues/367 is fixed
 declare const wallet: SnapProvider;
 
+interface TradeLog {
+  tokenA: {
+    address: Address;
+    name: string;
+    difference: string;
+  };
+  tokenB: {
+    address: Address;
+    name: string;
+    difference: string;
+  };
+  timestamp: number;
+}
+
+type State = {
+  logs: TradeLog[];
+};
+
 /**
  * Used to stop the infinite execution loop.
  * The main execute fuction waits for new trade events forever
@@ -23,6 +42,8 @@ declare const wallet: SnapProvider;
 let stopPromise:
   | { promise: Promise<typeof RETURN_OK>; resolve: () => void }
   | undefined;
+
+const stateMutex = new Mutex();
 
 async function getSigner(provider: ethers.providers.Provider): Promise<Wallet> {
   // Metamask uses default HD derivation path
@@ -196,15 +217,52 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
       ).wait();
 
       // Success
-      const endBalance: BigNumber = await tokenA.balanceOf(signer.address);
+      const endBalanceA: BigNumber = await tokenA.balanceOf(signer.address);
+      const endBalanceB: BigNumber = await tokenB.balanceOf(signer.address);
+
+      await stateMutex.runExclusive(async () => {
+        const state: State = ((await wallet.request({
+          method: 'snap_manageState',
+          params: ['get'],
+        })) as State | null) ?? { logs: [] };
+
+        state.logs.push({
+          tokenA: {
+            address: tokenAAddress,
+            name: tokenAData.name,
+            difference: endBalanceA.sub(startBalance).toString(),
+          },
+          tokenB: {
+            address: tokenBAddress,
+            name: tokenBData.name,
+            difference: endBalanceB.sub(tokenBInitialBalance).toString(),
+          },
+          timestamp: timestamp(),
+        });
+
+        await wallet.request({
+          method: 'snap_manageState',
+          params: ['update', state],
+        });
+      });
+
       console.log(
         'TRADER',
-        `Executed trade, gained ${endBalance.toString()}${
+        `Executed trade, gained ${endBalanceA.sub(startBalance).toString()}${
           tokenAData.symbol
         } tokens`,
       );
     }
   }
+}
+
+async function getExecuted() {
+  return (
+    ((await wallet.request({
+      method: 'snap_manageState',
+      params: ['get'],
+    })) as State | null) ?? { logs: [] }
+  ).logs;
 }
 
 async function stop() {
@@ -227,6 +285,8 @@ wallet.registerRpcMessageHandler(async (_originString, requestObject) => {
       );
     case 'stop':
       return await stop();
+    case 'get_executed':
+      return await getExecuted();
     default:
       throw new Error('Method not found.');
   }
