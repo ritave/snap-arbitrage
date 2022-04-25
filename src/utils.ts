@@ -8,12 +8,12 @@ export function onceToPromise<
   return new Promise((resolve) => emitter.once(event, resolve));
 }
 
-export function sortTokens(
-  tokenA: Address,
-  tokenB: Address,
+export function sortAddresses(
+  tokenAAddress: Address,
+  tokenBAddress: Address,
 ): [Address, Address] {
-  if (BigNumber.from(tokenA).lt(tokenB)) {
-    return [tokenA, tokenB];
+  if (BigNumber.from(tokenAAddress).lt(tokenBAddress)) {
+    return [tokenAAddress, tokenBAddress];
   }
-  return [tokenB, tokenA];
+  return [tokenBAddress, tokenAAddress];
 }

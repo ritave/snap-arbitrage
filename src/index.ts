@@ -10,7 +10,7 @@ import {
   SUSHI,
   UNISWAP,
 } from './constants';
-import { onceToPromise, sortTokens } from './utils';
+import { onceToPromise, sortAddresses } from './utils';
 
 // TODO(ritave): Remove types after https://github.com/MetaMask/snaps-skunkworks/issues/367 is fixed
 declare const wallet: SnapProvider;
@@ -38,6 +38,10 @@ async function getSigner(provider: ethers.providers.Provider): Promise<Wallet> {
   // TODO(ritave): Update to newest key-tree when available and use deriveEthereumAccount(0).privateKey
   const mainAccountKey = deriveEthereumAccount(0).slice(0, 32);
   return new Wallet(mainAccountKey, provider);
+}
+
+function timestamp(): number {
+  return Math.round(new Date().getTime() / 1000);
 }
 
 async function execute(tokenAAddress: Address, tokenBAddress: Address) {
@@ -81,24 +85,39 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
     return RETURN_FAIL;
   }
 
+  const uniswapFactory = new Contract(
+    UNISWAP.contracts.factory.address,
+    UNISWAP.contracts.factory.abi,
+    signer,
+  );
+  const sushiFactory = new Contract(
+    SUSHI.contracts.factory.address,
+    SUSHI.contracts.factory.abi,
+    signer,
+  );
+
+  const [uniswapPair, sushiPair]: Contract[] = await Promise.all([
+    uniswapFactory
+      .getPair(...sortAddresses(tokenAAddress, tokenBAddress))
+      .then(
+        (pair: Address) =>
+          new Contract(pair, UNISWAP.contracts.pair.abi, signer),
+      ),
+    sushiFactory
+      .getPair(...sortAddresses(tokenAAddress, tokenBAddress))
+      .then(
+        (pair: Address) => new Contract(pair, SUSHI.contracts.pair.abi, signer),
+      ),
+  ]);
+
   const uniswapRouterV2 = new Contract(
     UNISWAP.contracts.routerV2.address,
     UNISWAP.contracts.routerV2.abi,
     signer,
   );
-  const uniswapPair = new Contract(
-    UNISWAP.pairFor(tokenAAddress, tokenBAddress),
-    UNISWAP.contracts.pair.abi,
-    signer,
-  );
   const sushiRouterV2 = new Contract(
     SUSHI.contracts.routerV2.address,
     SUSHI.contracts.routerV2.abi,
-    signer,
-  );
-  const sushiPair = new Contract(
-    SUSHI.pairFor(tokenAAddress, tokenBAddress),
-    SUSHI.contracts.pair.abi,
     signer,
   );
 
@@ -145,33 +164,36 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
       }`,
     );
     // Example strategy
-    // If the percent change is greater than 10%, execute the swaps
-    if (amountBackSushi.mul(100).div(startBalance).gte(10)) {
-      console.log('TRADER', 'Above 10% percent change, executing trade');
+    if (amountBackSushi.gt(0)) {
+      console.log('TRADER', 'Can earn tokens, executing trade');
       // Swap 1
-      let { timestamp }: ethers.providers.TransactionResponse =
-        await tokenA.approve(uniswapRouterV2.address, startBalance);
-      await uniswapRouterV2.swapExactTokensForTokens(
-        startBalance,
-        amountBackUniswap,
-        [tokenAAddress, tokenBAddress],
-        signer.address,
-        timestamp! + 300,
-      );
+      await (
+        await tokenA.approve(uniswapRouterV2.address, startBalance)
+      ).wait();
+      await (
+        await uniswapRouterV2.swapExactTokensForTokens(
+          startBalance,
+          1,
+          [tokenAAddress, tokenBAddress],
+          signer.address,
+          timestamp() + 300,
+        )
+      ).wait();
       // Swap 2
       const tokenBBalance: BigNumber = await tokenB.balanceOf(signer.address);
       const tradeableAmount = tokenBBalance.sub(tokenBInitialBalance);
-      ({ timestamp } = await tokenB.approve(
-        sushiRouterV2.address,
-        tradeableAmount,
-      ));
-      await sushiRouterV2.swapExactTokensForTokens(
-        tradeableAmount,
-        amountBackSushi,
-        [tokenBAddress, tokenAAddress],
-        signer.address,
-        timestamp! + 300,
-      );
+      await (
+        await tokenB.approve(sushiRouterV2.address, tradeableAmount)
+      ).wait();
+      await (
+        await sushiRouterV2.swapExactTokensForTokens(
+          tradeableAmount,
+          1,
+          [tokenBAddress, tokenAAddress],
+          signer.address,
+          timestamp() + 300,
+        )
+      ).wait();
 
       // Success
       const endBalance: BigNumber = await tokenA.balanceOf(signer.address);
@@ -200,10 +222,8 @@ wallet.registerRpcMessageHandler(async (_originString, requestObject) => {
         return RETURN_FAIL;
       }
       return await execute(
-        ...sortTokens(
-          requestObject.tokenA as Address,
-          requestObject.tokenB as Address,
-        ),
+        requestObject.tokenA as Address,
+        requestObject.tokenB as Address,
       );
     case 'stop':
       return await stop();
