@@ -1,13 +1,19 @@
 import type { BIP44CoinTypeNode } from '@metamask/key-tree';
 import { getBIP44AddressKeyDeriver } from '@metamask/key-tree';
 import type { SnapProvider } from '@metamask/snap-types';
-import { ethers, Wallet } from 'ethers';
+import { BigNumber, Contract, ethers, Wallet } from 'ethers';
+import {
+  Address,
+  ERC20,
+  RETURN_FAIL,
+  RETURN_OK,
+  SUSHI,
+  UNISWAP,
+} from './constants';
+import { onceToPromise, sortTokens } from './utils';
 
 // TODO(ritave): Remove types after https://github.com/MetaMask/snaps-skunkworks/issues/367 is fixed
 declare const wallet: SnapProvider;
-
-const RETURN_OK = 'Ok';
-const RETURN_FAIL = 'Fail';
 
 /**
  * Used to stop the infinite execution loop.
@@ -34,17 +40,40 @@ async function getSigner(provider: ethers.providers.Provider): Promise<Wallet> {
   return new Wallet(mainAccountKey, provider);
 }
 
-async function execute() {
+async function execute(tokenAAddress: Address, tokenBAddress: Address) {
   const provider = new ethers.providers.Web3Provider(wallet as any);
   // We use a private keys directly to skip Metamask send transaction user requests
   const signer = await getSigner(provider);
+
+  if ((await provider.getNetwork()).name !== 'rinkeby') {
+    return RETURN_FAIL;
+  }
+
+  const tokenA = new Contract(tokenAAddress, ERC20.abi, signer);
+  const tokenB = new Contract(tokenBAddress, ERC20.abi, signer);
+
+  // Asynchronous calls instead of linear
+  const tokenData: [string, string, string] = await Promise.all([
+    tokenA.name(),
+    tokenA.symbol(),
+    tokenB.name(),
+  ]);
+
+  const tokenAData = {
+    name: tokenData[0],
+    symbol: tokenData[1],
+  };
+
+  const tokenBData = {
+    name: tokenData[2],
+  };
 
   const shouldContinue = await wallet.request({
     method: 'snap_confirm',
     params: [
       {
         prompt: 'Do you want to use this account?',
-        textAreaContent: `Do you want to use the account "${signer.address}" for algorithmic trading?`,
+        textAreaContent: `Do you want to use the account "${signer.address}" for algorithmic trading between "${tokenAData.name}" and "${tokenBData.name}"?`,
       },
     ],
   });
@@ -52,15 +81,106 @@ async function execute() {
     return RETURN_FAIL;
   }
 
+  const uniswapRouterV2 = new Contract(
+    UNISWAP.contracts.routerV2.address,
+    UNISWAP.contracts.routerV2.abi,
+    signer,
+  );
+  const uniswapPair = new Contract(
+    UNISWAP.pairFor(tokenAAddress, tokenBAddress),
+    UNISWAP.contracts.pair.abi,
+    signer,
+  );
+  const sushiRouterV2 = new Contract(
+    SUSHI.contracts.routerV2.address,
+    SUSHI.contracts.routerV2.abi,
+    signer,
+  );
+  const sushiPair = new Contract(
+    SUSHI.pairFor(tokenAAddress, tokenBAddress),
+    SUSHI.contracts.pair.abi,
+    signer,
+  );
+
   let promise: Promise<typeof RETURN_OK>;
-  let resolve: () => void;
-  promise = new Promise((r) => (resolve = () => r(RETURN_OK)));
+  let resolve!: () => void;
+  promise = new Promise((r) => {
+    resolve = () => r(RETURN_OK);
+  });
   stopPromise = { promise, resolve };
 
   while (true) {
-    const result = await Promise.race([stopPromise.promise]);
+    console.log('TRADER', 'Listening for events');
+    // Wait for any change of state or request to finish
+    const result = await Promise.race([
+      stopPromise.promise,
+      onceToPromise(uniswapPair, uniswapPair.filters.Sync()),
+      onceToPromise(sushiPair, sushiPair.filters.Sync()),
+    ]);
+
     if (result === RETURN_OK) {
+      console.log('TRADER', 'Requested to stop');
+      stopPromise = undefined;
       return RETURN_OK;
+    }
+    console.log('TRADER', 'Sync happened, calculating trade');
+
+    // In real life, swaps and estimation would be done in a smart-contract to be atomic
+    const [startBalance, tokenBInitialBalance]: BigNumber[] = await Promise.all(
+      [tokenA.balanceOf(signer.address), tokenB.balanceOf(signer.address)],
+    );
+    const [, amountBackUniswap]: BigNumber[] =
+      await uniswapRouterV2.getAmountsOut(startBalance, [
+        tokenAAddress,
+        tokenBAddress,
+      ]);
+    const [, amountBackSushi]: BigNumber[] = await sushiRouterV2.getAmountsOut(
+      amountBackUniswap,
+      [tokenBAddress, tokenAAddress],
+    );
+    console.log(
+      'TRADER',
+      `Expected amount gained ${amountBackSushi.toString()}${
+        tokenAData.symbol
+      }`,
+    );
+    // Example strategy
+    // If the percent change is greater than 10%, execute the swaps
+    if (amountBackSushi.mul(100).div(startBalance).gte(10)) {
+      console.log('TRADER', 'Above 10% percent change, executing trade');
+      // Swap 1
+      let { timestamp }: ethers.providers.TransactionResponse =
+        await tokenA.approve(uniswapRouterV2.address, startBalance);
+      await uniswapRouterV2.swapExactTokensForTokens(
+        startBalance,
+        amountBackUniswap,
+        [tokenAAddress, tokenBAddress],
+        signer.address,
+        timestamp! + 300,
+      );
+      // Swap 2
+      const tokenBBalance: BigNumber = await tokenB.balanceOf(signer.address);
+      const tradeableAmount = tokenBBalance.sub(tokenBInitialBalance);
+      ({ timestamp } = await tokenB.approve(
+        sushiRouterV2.address,
+        tradeableAmount,
+      ));
+      await sushiRouterV2.swapExactTokensForTokens(
+        tradeableAmount,
+        amountBackSushi,
+        [tokenBAddress, tokenAAddress],
+        signer.address,
+        timestamp! + 300,
+      );
+
+      // Success
+      const endBalance: BigNumber = await tokenA.balanceOf(signer.address);
+      console.log(
+        'TRADER',
+        `Executed trade, gained ${endBalance.toString()}${
+          tokenAData.symbol
+        } tokens`,
+      );
     }
   }
 }
@@ -70,14 +190,21 @@ async function stop() {
     return RETURN_FAIL;
   }
   stopPromise.resolve();
-  stopPromise = undefined;
   return RETURN_OK;
 }
 
 wallet.registerRpcMessageHandler(async (_originString, requestObject) => {
   switch (requestObject.method) {
     case 'execute':
-      return await execute();
+      if (stopPromise !== undefined) {
+        return RETURN_FAIL;
+      }
+      return await execute(
+        ...sortTokens(
+          requestObject.tokenA as Address,
+          requestObject.tokenB as Address,
+        ),
+      );
     case 'stop':
       return await stop();
     default:

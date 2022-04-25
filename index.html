@@ -28,17 +28,28 @@
     <br />
 
     <button class="connect">Connect</button>
-    <button class="sendExecute">Start arbitrage trading</button>
+    <div>
+      <input type="text" placeholder="Token A address" class="inputTokenA" />
+      <input type="text" placeholder="Token B address" class="inputTokenB" />
+      <button class="sendExecute">Start arbitrage trading</button>
+      <button class="sendStop">Stop</button>
+    </div>
   </body>
 
   <script>
     const snapId = `local:${window.location.href}`;
 
     const connectButton = document.querySelector('button.connect');
+    const inputTokenA = document.querySelector('input.inputTokenA');
+    const inputTokenB = document.querySelector('input.inputTokenB');
     const sendExecute = document.querySelector('button.sendExecute');
+    const sendStop = document.querySelector('button.sendStop');
 
     connectButton.addEventListener('click', connect);
-    sendExecute.addEventListener('click', execute);
+    sendExecute.addEventListener('click', () =>
+      execute(inputTokenA.value, inputTokenB.value),
+    );
+    sendStop.addEventListener('click', stop);
 
     // here we get permissions to interact with and install the snap
     async function connect() {
@@ -53,7 +64,7 @@
     }
 
     // here we call the snap's "execute" method
-    async function execute() {
+    async function execute(tokenA, tokenB) {
       try {
         const response = await ethereum.request({
           method: 'wallet_invokeSnap',
@@ -61,6 +72,26 @@
             snapId,
             {
               method: 'execute',
+              tokenA,
+              tokenB,
+            },
+          ],
+        });
+        alert(response);
+      } catch (err) {
+        console.error(err);
+        alert('Problem happened: ' + err.message || err);
+      }
+    }
+
+    async function stop() {
+      try {
+        const response = await ethereum.request({
+          method: 'wallet_invokeSnap',
+          params: [
+            snapId,
+            {
+              method: 'stop',
             },
           ],
         });
