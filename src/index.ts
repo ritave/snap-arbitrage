@@ -169,8 +169,10 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
     const [startBalance, tokenBInitialBalance]: BigNumber[] = await Promise.all(
       [tokenA.balanceOf(signer.address), tokenB.balanceOf(signer.address)],
     );
+    // We're trading only half to avoid bugs and not to lose all of our tokens
+    const startingTradeAmount = startBalance.div(2);
     const [, amountBackUniswap]: BigNumber[] =
-      await uniswapRouterV2.getAmountsOut(startBalance, [
+      await uniswapRouterV2.getAmountsOut(startingTradeAmount, [
         tokenAAddress,
         tokenBAddress,
       ]);
@@ -185,15 +187,15 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
       }`,
     );
     // Example strategy
-    if (amountBackSushi.gt(0)) {
+    if (amountBackSushi.sub(startingTradeAmount).gt(0)) {
       console.log('TRADER', 'Can earn tokens, executing trade');
       // Swap 1
       await (
-        await tokenA.approve(uniswapRouterV2.address, startBalance)
+        await tokenA.approve(uniswapRouterV2.address, startingTradeAmount)
       ).wait();
       await (
         await uniswapRouterV2.swapExactTokensForTokens(
-          startBalance,
+          startingTradeAmount,
           1,
           [tokenAAddress, tokenBAddress],
           signer.address,
@@ -230,7 +232,7 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
           tokenA: {
             address: tokenAAddress,
             name: tokenAData.name,
-            difference: endBalanceA.sub(startBalance).toString(),
+            difference: endBalanceA.sub(startingTradeAmount).toString(),
           },
           tokenB: {
             address: tokenBAddress,
