@@ -18,12 +18,10 @@ declare const wallet: SnapProvider;
 
 interface TradeLog {
   tokenA: {
-    address: Address;
     name: string;
     difference: string;
   };
   tokenB: {
-    address: Address;
     name: string;
     difference: string;
   };
@@ -230,12 +228,10 @@ async function execute(tokenAAddress: Address, tokenBAddress: Address) {
 
         state.logs.push({
           tokenA: {
-            address: tokenAAddress,
             name: tokenAData.name,
             difference: endBalanceA.sub(startingTradeAmount).toString(),
           },
           tokenB: {
-            address: tokenBAddress,
             name: tokenBData.name,
             difference: endBalanceB.sub(tokenBInitialBalance).toString(),
           },
